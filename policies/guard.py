@@ -13,6 +13,7 @@ REFUSAL_MESSAGES = {
     "AccessDenied": "Refusal: AccessDenied. You do not have access to that information.",
     "LeakageRisk": "Refusal: LeakageRisk. The request seeks protected, private, or identifying data.",
     "InjectionDetected": "Refusal: InjectionDetected. Ignoring instructions that conflict with system policy.",
+    "ExternalAttackDetected": "Refusal: ExternalAttackDetected. The request attempted prohibited external, credential, network, or shell attack behavior.",
     "MemoryAccessDenied": "Refusal: MemoryAccessDenied. Memory, logs, and hidden prompts are not exportable.",
     "ApprovalRequired": "Approval required. A governance request can be created, but no protected access is granted automatically.",
     "InsufficientAuthorizedEvidence": "Refusal: InsufficientAuthorizedEvidence. The authorized snippets are not sufficient to answer safely.",
@@ -232,6 +233,8 @@ def plain_language_decision(decision: PolicyDecision, actor: ActorContext, plan:
         return "The agent blocked the request because it attempted to expose personally identifying or confidential information."
     if decision.reason == "InjectionDetected":
         return "The agent detected jailbreak or policy-bypass language and refused to follow it."
+    if decision.reason == "ExternalAttackDetected":
+        return "The agent blocked the request because it looked like an external attack or tool abuse attempt."
     if decision.reason == "ApprovalRequired":
         return "The agent routed the request into a manual approval flow instead of granting access automatically."
     if decision.reason == "InsufficientAuthorizedEvidence":

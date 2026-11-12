@@ -365,6 +365,7 @@ def build_provider(cfg: dict) -> ProviderChain:
     llm_cfg = cfg.get("llm") or {}
     primary = (llm_cfg.get("provider") or "anthropic").lower()
     fallback = (llm_cfg.get("fallback_provider") or "mock").lower()
+    strict_primary = bool(llm_cfg.get("strict_primary", False))
 
     factory = {
         "anthropic": lambda: AnthropicMessagesProvider(cfg),
@@ -373,7 +374,8 @@ def build_provider(cfg: dict) -> ProviderChain:
     }
 
     providers: list[LLMProvider] = []
-    for name in [primary, fallback]:
+    provider_names = [primary] if strict_primary else [primary, fallback]
+    for name in provider_names:
         if name in factory and name not in [provider.name for provider in providers]:
             providers.append(factory[name]())
     if not providers:

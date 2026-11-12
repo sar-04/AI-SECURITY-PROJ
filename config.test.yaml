@@ -1,6 +1,7 @@
 llm:
   provider: mock
   fallback_provider: mock
+  strict_primary: false
   anthropic:
     model: claude-3-5-sonnet-latest
     api_base: https://api.anthropic.com/v1/messages
@@ -25,3 +26,9 @@ mcp:
   rate_limit_per_minute: 100
   kill_switch: false
   shared_secret: secure-lab-test-secret-1234567890
+
+security:
+  firewall:
+    enabled: true
+    fail_closed: false
+    mode: llm_hybrid

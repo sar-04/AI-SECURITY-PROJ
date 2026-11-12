@@ -38,6 +38,10 @@ def main():
         print(f"Decision: {result.decision.value}")
         print(f"Policy: {result.policy_reason}")
         print(f"Trace: {result.trace_id}")
+        print(f"Model: {result.model}")
+        print(f"Firewall: {result.firewall_provider or 'disabled'} ({result.firewall_mode or 'n/a'})")
+        if result.firewall_events:
+            print(f"Firewall Stages: {', '.join(result.firewall_events)}")
         if result.docs:
             print(f"Docs: {', '.join(result.docs)}")
         if result.tools_called:

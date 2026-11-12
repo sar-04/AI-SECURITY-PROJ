@@ -13,7 +13,7 @@ from agents.audit import log_audit, sha256_text
 from agents.llm import SYSTEM_PROMPT, build_provider
 from agents.mcp_client import ManagedMCPClient
 from agents.memory import MemoryStore
-from agents.models import ActorContext, AgentRunResult, AuditEvent, CacheHint, Decision, PolicyDecision, ToolInvocation
+from agents.models import ActorContext, AgentRunResult, AuditEvent, CacheHint, Decision, PolicyDecision, SourceSnippet, ToolInvocation
 from agents.tenant import normalize_tenant_id, tenant_scope, tool_scope
 from mcp_gateway.app import build_local_mcp_apps
 from mcp_gateway.auth import issue_client_token
@@ -23,6 +23,7 @@ from policies.guard import (
     refusal_template,
     validate_output,
 )
+from security.firewall import SecurityFirewall
 
 
 def _load_cfg_from_disk(base_dir: str) -> dict:
@@ -71,10 +72,50 @@ def _assistant_tool_message(tool_calls: list[ToolInvocation]) -> dict[str, Any]:
     }
 
 
-async def _execute_tool_calls(session, tool_calls: list[ToolInvocation], allowed_tools: list[str]) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+def _snippets_from_payload(payload: dict[str, Any]) -> list[SourceSnippet]:
+    snippets: list[SourceSnippet] = []
+    for raw_snippet in payload.get("snippets") or []:
+        try:
+            snippets.append(SourceSnippet.model_validate(raw_snippet))
+        except Exception:  # noqa: BLE001
+            continue
+    excerpt = payload.get("excerpt")
+    if excerpt:
+        snippets.append(
+            SourceSnippet(
+                index=len(snippets) + 1,
+                doc_id=str(payload.get("doc_id", "excerpt")),
+                tenant_id=str(payload.get("tenant_id", "unknown")),
+                visibility=str(payload.get("visibility", "unknown")),
+                text=str(excerpt),
+                score=1.0,
+                pii_masked="[REDACTED]" in str(excerpt),
+            )
+        )
+    return snippets
+
+
+def _merge_policy(base: PolicyDecision, overlay: PolicyDecision | None) -> PolicyDecision:
+    if overlay is None:
+        return base
+    if overlay.decision == Decision.REFUSE:
+        return overlay
+    if base.decision == Decision.REFUSE:
+        return base
+    required_approval = base.required_approval or overlay.required_approval
+    reason = base.reason
+    explain = base.explain
+    if overlay.reason not in {"AllowRetrieval", "RetrievedContextSafe", "OutputSafe", "FirewallDisabled"}:
+        reason = overlay.reason
+        explain = overlay.explain or explain
+    return base.model_copy(update={"required_approval": required_approval, "reason": reason, "explain": explain})
+
+
+async def _execute_tool_calls(session, tool_calls: list[ToolInvocation], allowed_tools: list[str]) -> tuple[list[dict[str, Any]], list[str], list[str], list[SourceSnippet]]:
     tool_result_blocks: list[dict[str, Any]] = []
     tools_called: list[str] = []
     doc_ids: list[str] = []
+    snippets: list[SourceSnippet] = []
     for tool_call in tool_calls:
         if tool_call.name not in allowed_tools:
             payload = {"_tool_name": tool_call.name, "error": "ToolNotAllowed"}
@@ -94,6 +135,7 @@ async def _execute_tool_calls(session, tool_calls: list[ToolInvocation], allowed
             payload = json.loads(serialized)
             if "documents" in payload:
                 doc_ids.extend(payload["documents"])
+            snippets.extend(_snippets_from_payload(payload))
         except json.JSONDecodeError:
             payload = {"raw": serialized}
         tool_result_blocks.append(
@@ -104,7 +146,7 @@ async def _execute_tool_calls(session, tool_calls: list[ToolInvocation], allowed
             }
         )
         tools_called.append(tool_call.name)
-    return tool_result_blocks, tools_called, doc_ids
+    return tool_result_blocks, tools_called, doc_ids, snippets
 
 
 async def run_agent_async(
@@ -125,11 +167,17 @@ async def run_agent_async(
     started = time.time()
     run_path, audit_path = _logging_paths(cfg)
     provider = build_provider(cfg)
+    firewall = SecurityFirewall(cfg)
     memory_store = MemoryStore(base_dir)
+    firewall_events: list[str] = []
 
     plan, policy = evaluate_input_policy(actor_ctx, user_query)
     tools_called: list[str] = []
     doc_ids: list[str] = []
+    authorized_snippets: list[SourceSnippet] = []
+    firewall_input = await firewall.inspect_input(actor_ctx, plan, user_query)
+    policy = _merge_policy(policy, firewall_input)
+    firewall_events.append(f"input:{firewall_input.reason}")
     if policy.decision == Decision.REFUSE:
         text = refusal_template(policy.reason)
         latency_ms = int((time.time() - started) * 1000)
@@ -148,7 +196,16 @@ async def run_agent_async(
         log_audit(audit_path, audit)
         log_audit(
             run_path,
-            audit.model_copy(update={"extra": {"query": user_query, "explanation": plain_language_decision(policy, actor_ctx, plan)}}),
+            audit.model_copy(
+                update={
+                    "extra": {
+                        "query": user_query,
+                        "explanation": plain_language_decision(policy, actor_ctx, plan),
+                        "firewall_provider": firewall.provider_name,
+                        "firewall_events": firewall_events,
+                    }
+                }
+            ),
         )
         memory_store.append_summary(actor_ctx, user_query, text, Decision.REFUSE)
         return AgentRunResult(
@@ -160,6 +217,9 @@ async def run_agent_async(
             docs=[],
             tools_called=[],
             model=provider.providers[0].name,
+            firewall_provider=firewall.provider_name,
+            firewall_mode=firewall.mode,
+            firewall_events=firewall_events,
         )
 
     all_scopes = ["mcp:invoke", tenant_scope(actor_ctx.tenant_id)] + [tool_scope(name) for name in policy.allowed_tools]
@@ -186,11 +246,19 @@ async def run_agent_async(
             provider_name = llm_response.raw.get("provider", provider_name)
             if llm_response.tool_calls:
                 messages.append(_assistant_tool_message(llm_response.tool_calls))
-                tool_result_blocks, current_tools, current_docs = await _execute_tool_calls(
+                tool_result_blocks, current_tools, current_docs, current_snippets = await _execute_tool_calls(
                     session, llm_response.tool_calls, allowed_tools
                 )
                 tools_called.extend(current_tools)
                 doc_ids.extend(current_docs)
+                authorized_snippets.extend(current_snippets)
+                retrieval_firewall = await firewall.inspect_retrieval(actor_ctx, plan, current_snippets)
+                firewall_events.append(f"retrieval:{retrieval_firewall.reason}")
+                if retrieval_firewall.decision == Decision.REFUSE:
+                    response_text = refusal_template(retrieval_firewall.reason)
+                    final_decision = Decision.REFUSE
+                    policy = retrieval_firewall
+                    break
                 messages.append({"role": "user", "content": tool_result_blocks})
                 continue
             response_text = llm_response.text.strip()
@@ -201,7 +269,9 @@ async def run_agent_async(
             final_decision = Decision.REFUSE
             policy = PolicyDecision(decision=Decision.REFUSE, reason="InsufficientAuthorizedEvidence")
         else:
-            output_policy = validate_output(response_text, [])
+            output_firewall = await firewall.inspect_output(actor_ctx, plan, response_text, authorized_snippets)
+            firewall_events.append(f"output:{output_firewall.reason}")
+            output_policy = _merge_policy(validate_output(response_text, authorized_snippets), output_firewall)
             if output_policy.decision == Decision.REFUSE:
                 response_text = refusal_template(output_policy.reason)
                 final_decision = Decision.REFUSE
@@ -223,7 +293,7 @@ async def run_agent_async(
         docs=doc_ids,
         redactions=policy.redactions,
         query_sha256=sha256_text(user_query),
-        extra={"server_state": server_state},
+        extra={"server_state": server_state, "firewall_provider": firewall.provider_name, "firewall_events": firewall_events},
     )
     log_audit(audit_path, audit)
     log_audit(
@@ -242,6 +312,9 @@ async def run_agent_async(
         docs=doc_ids,
         tools_called=tools_called,
         model=provider_name,
+        firewall_provider=firewall.provider_name,
+        firewall_mode=firewall.mode,
+        firewall_events=firewall_events,
     )
 
 

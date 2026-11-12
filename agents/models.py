@@ -95,4 +95,6 @@ class AgentRunResult(BaseModel):
     docs: list[str] = Field(default_factory=list)
     tools_called: list[str] = Field(default_factory=list)
     model: str = ""
-
+    firewall_provider: str = ""
+    firewall_mode: str = ""
+    firewall_events: list[str] = Field(default_factory=list)
