@@ -4,6 +4,15 @@ This repository is a terminal-first demo of how to build and secure an AI agent 
 
 It simulates a research organization with separate labs, shared public knowledge, sensitive internal data, and a tool-using agent that must stay useful without becoming unsafe.
 
+## Measured results
+
+On 44 labelled attacks and 38 normal questions, offline with the rules layer only: **0 of 44 attacks leaked data**, 35 of 44 were refused outright, and all 28 plain questions were answered. The keyword rules wrongly refused 7 of 8 normal questions that used words like "token" or "logs", which is the job of the LLM judge layer. Full numbers, method and the open questions are in [eval/RESULTS.md](eval/RESULTS.md).
+
+```
+python tools/measure_defences.py --config config.test.yaml   # offline, no API key
+```
+
+
 The project is designed to showcase:
 
 - Anthropic-compatible agent orchestration

@@ -221,6 +221,8 @@ class MockProvider(LLMProvider):
                     lines.append(f"{snippet_text}. [{snippet['index']}]")
                 answer = "Authorized summary:\n" + "\n".join(lines)
                 return LLMResponse(text=answer)
+            if tool_name in ("governance_submit_access_request", "governance_get_request_status") and "request_id" not in result:
+                return LLMResponse(text=f"Refusal: AccessDenied. {result.get('error') or result.get('message') or 'The governance tool returned no request.'}")
             if tool_name == "governance_submit_access_request":
                 return LLMResponse(
                     text=(
