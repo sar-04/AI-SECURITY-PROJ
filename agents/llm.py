@@ -60,7 +60,7 @@ class AnthropicMessagesProvider(LLMProvider):
 
     def __init__(self, cfg: dict):
         anthropic_cfg = (cfg.get("llm") or {}).get("anthropic") or {}
-        self.model = anthropic_cfg.get("model", "claude-3-5-sonnet-latest")
+        self.model = anthropic_cfg.get("model", "claude-sonnet-5-5")
         self.api_base = anthropic_cfg.get("api_base", "https://api.anthropic.com/v1/messages")
         self.api_version = anthropic_cfg.get("api_version", "2023-06-01")
         self.max_tokens = int(anthropic_cfg.get("max_tokens", 500))

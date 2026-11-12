@@ -113,7 +113,7 @@ class SecurityFirewall:
     def __init__(self, cfg: dict):
         firewall_cfg = ((cfg.get("security") or {}).get("firewall") or {})
         self.enabled = bool(firewall_cfg.get("enabled", True))
-        self.fail_closed = bool(firewall_cfg.get("fail_closed", False))
+        self.fail_closed = bool(firewall_cfg.get("fail_closed", True))
         self.mode = str(firewall_cfg.get("mode", "llm_hybrid"))
         self.provider = build_provider(cfg) if self.enabled else None
         self.provider_name = "disabled"

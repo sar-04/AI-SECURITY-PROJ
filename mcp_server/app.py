@@ -114,7 +114,7 @@ def build_server_app(base_dir: str, cfg: dict):
         request = approvals.get_request(request_id)
         if request is None:
             return {"request_id": request_id, "status": "not_found", "documents": []}
-        if request["actor_id"] != actor.actor_id and request["tenant_id"] != actor.tenant_id:
+        if request["actor_id"] != actor.actor_id or request["tenant_id"] != actor.tenant_id:
             raise PermissionError("Approval request belongs to a different actor.")
         return {**request, "documents": []}
 

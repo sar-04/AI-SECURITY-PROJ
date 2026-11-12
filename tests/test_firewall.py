@@ -31,3 +31,20 @@ def test_firewall_blocks_external_attack_language(base_dir: str, test_cfg: dict)
     assert result.decision.value == "refuse"
     assert result.policy_reason == "ExternalAttackDetected"
     assert any(event.startswith("input:ExternalAttackDetected") for event in result.firewall_events)
+
+
+def test_firewall_fails_closed_when_judge_errors(test_cfg: dict):
+    from agents.models import ActorContext, RequestPlan
+    from security.firewall import SecurityFirewall
+
+    class BrokenProvider:
+        async def generate(self, **kwargs):
+            raise RuntimeError("judge unavailable")
+
+    fw = SecurityFirewall(test_cfg)
+    fw.provider = BrokenProvider()
+    assert fw.fail_closed is True
+    actor = ActorContext(actor_id="U1", tenant_id="U1_genomics", scopes=[])
+    plan = RequestPlan.model_construct()
+    decision = asyncio.run(fw.inspect_input(actor, plan, "Summarise the latest genomics dataset."))
+    assert decision.decision.value == "refuse"
